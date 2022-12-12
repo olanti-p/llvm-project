@@ -19,6 +19,7 @@
 #include "../ClangTidyForceLinker.h"
 #include "../GlobList.h"
 #include "clang/Tooling/CommonOptionsParser.h"
+#include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Signals.h"
@@ -190,6 +191,12 @@ configuration of all checks.
 )"),
                                 cl::init(false), cl::cat(ClangTidyCategory));
 
+static cl::opt<std::string> Plugins("plugins", cl::desc(R"(
+Comma-separated list of plugins:
+  -plugins="my-check.so,..."
+)"),
+                                   cl::init(""), cl::cat(ClangTidyCategory));
+
 static cl::opt<bool> EnableCheckProfile("enable-check-profile", cl::desc(R"(
 Enable per-check timing profiles, and print a
 report to stderr.
@@ -303,6 +310,8 @@ static std::unique_ptr<ClangTidyOptionsProvider> createOptionsProvider(
     OverrideOptions.Checks = Checks;
   if (WarningsAsErrors.getNumOccurrences() > 0)
     OverrideOptions.WarningsAsErrors = WarningsAsErrors;
+  if (Plugins.getNumOccurrences() > 0)
+    OverrideOptions.Plugins = Plugins;
   if (HeaderFilter.getNumOccurrences() > 0)
     OverrideOptions.HeaderFilterRegex = HeaderFilter;
   if (SystemHeaders.getNumOccurrences() > 0)
@@ -423,6 +432,18 @@ int clangTidyMain(int argc, const char **argv) {
   SmallString<256> FilePath = MakeAbsolute(std::string(FileName));
 
   ClangTidyOptions EffectiveOptions = OptionsProvider->getOptions(FilePath);
+  if (EffectiveOptions.Plugins) {
+    SmallVector<StringRef, 10> PluginNames;
+    StringRef(*EffectiveOptions.Plugins).split(PluginNames, ",", -1, false);
+    for (StringRef PluginNameRef : PluginNames) {
+      std::string PluginName = PluginNameRef.str();
+      std::string errMsg;
+      if (llvm::sys::DynamicLibrary::LoadLibraryPermanently(PluginName.c_str(), &errMsg)) {
+        llvm::errs() << "Failed to load plugin " << PluginName << ": " << errMsg << "\n";
+        return 1;
+      }
+    }
+  }
   std::vector<std::string> EnabledChecks =
       getCheckNames(EffectiveOptions, AllowEnablingAnalyzerAlphaCheckers);
 
